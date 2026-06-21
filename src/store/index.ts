@@ -21,6 +21,8 @@ export type QualityTier = 'high' | 'medium' | 'low';
 export type QualitySetting = QualityTier | 'auto';
 export type BoardStyle = 'solid' | 'wood';
 export type Gender = 'male' | 'female';
+/** Camera point-of-view: auto cinematic director, single-person follow POV, or free orbit. */
+export type CameraMode = 'cinematic' | 'follow' | 'free';
 
 /** Color palettes chosen in Setup / Settings. Index 0 of board/table is the default. */
 export const BOARD_PALETTE: ReadonlyArray<readonly [string, string]> = [
@@ -85,6 +87,7 @@ interface PersistedSettings {
   /** Light/dark tile pair; click the board to cycle it (BOARD_PALETTE). */
   boardColors: [string, string];
   boardStyle: BoardStyle;
+  cameraMode: CameraMode;
 }
 
 const SETTINGS_KEY = 'serpents-ascent:settings:v1';
@@ -97,6 +100,7 @@ function loadSettings(): PersistedSettings {
     tableColor: DEFAULT_TABLE_COLOR,
     boardColors: DEFAULT_BOARD_COLORS,
     boardStyle: 'solid',
+    cameraMode: 'cinematic',
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -164,6 +168,7 @@ export interface AppStore {
   tableColor: string;
   boardColors: [string, string];
   boardStyle: BoardStyle;
+  cameraMode: CameraMode;
   setTheme: (t: ThemeId) => void;
   setQuality: (q: QualitySetting) => void;
   setResolvedTier: (t: QualityTier) => void;
@@ -172,6 +177,7 @@ export interface AppStore {
   setTableColor: (c: string) => void;
   setBoardColors: (c: [string, string]) => void;
   setBoardStyle: (b: BoardStyle) => void;
+  setCameraMode: (m: CameraMode) => void;
 }
 
 /** CHECK_WIN and NEXT_TURN are decision phases with no animation dwell — resolve inline. */
@@ -266,6 +272,7 @@ export const useStore = create<AppStore>()((set, get) => ({
   tableColor: initialSettings.tableColor,
   boardColors: initialSettings.boardColors,
   boardStyle: initialSettings.boardStyle,
+  cameraMode: initialSettings.cameraMode,
   setTheme: (theme) => {
     set({ theme });
     persist();
@@ -292,10 +299,14 @@ export const useStore = create<AppStore>()((set, get) => ({
     set({ boardStyle });
     persist();
   },
+  setCameraMode: (cameraMode) => {
+    set({ cameraMode });
+    persist();
+  },
 }));
 
 /** Snapshot the persisted settings from live state and write them. */
 function persist(): void {
-  const { theme, quality, soundOn, tableColor, boardColors, boardStyle } = useStore.getState();
-  saveSettings({ theme, quality, soundOn, tableColor, boardColors, boardStyle });
+  const { theme, quality, soundOn, tableColor, boardColors, boardStyle, cameraMode } = useStore.getState();
+  saveSettings({ theme, quality, soundOn, tableColor, boardColors, boardStyle, cameraMode });
 }

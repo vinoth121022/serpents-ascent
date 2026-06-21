@@ -82,7 +82,7 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
     }
   }, [phase, winner, playerIndex, actions, startWalk]);
 
-  useFrame((_, dt) => {
+  useFrame((state, dt) => {
     const g = root.current;
     if (g === null) return;
     g.getWorldPosition(_world);
@@ -120,7 +120,23 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
     }
 
     // Walk while moving, freeze (stand) when idle — never a T-pose (skip during climb/win).
-    if (walk && !flipped.current && !climbing) walk.paused = moved <= 0.0006;
+    const idle = !flipped.current && !climbing && moved <= 0.0006;
+    if (walk && !flipped.current && !climbing) walk.paused = idle;
+
+    // Alive idle "groove" — a rhythmic bounce + weight-shift sway (per-player phase) so
+    // a waiting piece reads as alive and dancing, never a dead statue. Eased out when it
+    // starts moving so the walk stays clean.
+    if (idle) {
+      const gt = (state.clock.elapsedTime + playerIndex * 1.7) * 5.4;
+      g.position.y = Math.abs(Math.sin(gt)) * 0.05; // bouncy beat
+      g.position.x = Math.sin(gt * 0.5) * 0.025; // step side-to-side
+      g.rotation.z = Math.sin(gt * 0.5) * 0.1; // lean / weight shift
+    } else {
+      const k = Math.min(1, d * 10);
+      g.position.y += -g.position.y * k;
+      g.position.x += -g.position.x * k;
+      g.rotation.z += -g.rotation.z * k;
+    }
 
     // Lean forward into the rungs while climbing so the upright climb clip reads as
     // clambering up the (flat) ladder; ease back to upright otherwise.

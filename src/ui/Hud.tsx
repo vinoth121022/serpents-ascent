@@ -7,6 +7,7 @@ import {
   TOKEN_PALETTE,
   useStore,
   type BoardStyle,
+  type CameraMode,
   type Gender,
   type QualitySetting,
 } from '../store';
@@ -81,6 +82,8 @@ function GameSidebar() {
   const resolvedTier = useStore((s) => s.resolvedTier);
   const soundOn = useStore((s) => s.soundOn);
   const setSoundOn = useStore((s) => s.setSoundOn);
+  const cameraMode = useStore((s) => s.cameraMode);
+  const setCameraMode = useStore((s) => s.setCameraMode);
 
   const current = must(game.players[game.current]);
   const canRoll = game.phase === 'AWAITING_ROLL';
@@ -156,6 +159,21 @@ function GameSidebar() {
         </div>
 
         <BoardColorPicker />
+
+        <label>Camera</label>
+        <div className="seg">
+          {(
+            [
+              ['cinematic', '🎬 Cinematic', 'Auto director: close-up on the die, then tracks your piece as it moves'],
+              ['follow', '👤 Follow', 'Single-person view: over-the-shoulder of your piece while it moves'],
+              ['free', '🕹 Free', 'Manual orbit — you control the camera'],
+            ] as [CameraMode, string, string][]
+          ).map(([m, lbl, tip]) => (
+            <button key={m} className={cameraMode === m ? 'on' : undefined} onClick={() => setCameraMode(m)} title={tip}>
+              {lbl}
+            </button>
+          ))}
+        </div>
 
         <label>Quality {quality === 'auto' ? `(auto → ${resolvedTier})` : ''}</label>
         <div className="seg">

@@ -18,6 +18,9 @@ const DIST_MIN = 6;
 const DIST_MAX = 22;
 const PAN_RADIUS = 4;
 const CINEMATIC_DIST = 8.5; // dolly-in distance while a pawn is travelling
+const DIE_DIST = 7; // dolly-in distance for the die close-up between/after turns
+const FOLLOW_RADIUS = 2.6; // single-person POV: how far behind the piece
+const FOLLOW_POLAR = 62 * DEG; // single-person POV: behind + slightly above, looking forward
 const INTRO_FROM = new Spherical(21.5, 20 * DEG, -38 * DEG);
 const INTRO_SECONDS = 2.5;
 const RESET_SECONDS = 0.8;
@@ -37,6 +40,7 @@ interface Glide {
 
 const tmpV = new Vector3();
 const tmpOffset = new Vector3();
+const tmpFocus = new Vector3();
 const tmpS = new Spherical();
 
 /**
@@ -62,6 +66,8 @@ export function CameraDirector() {
   const introT = useRef(0);
   const winTheta = useRef(0);
   const cineDist = useRef<number | null>(null); // resting distance to restore after a push-in
+  const followAz = useRef(0); // smoothed over-the-shoulder azimuth (follow POV)
+  const lastPiece = useRef(new Vector3()); // previous piece position → travel direction
 
   // Apply the intro start pose immediately so frame 1 is the establishing shot.
   useEffect(() => {
@@ -121,7 +127,7 @@ export function CameraDirector() {
   useFrame((_, dt) => {
     const controls = controlsRef.current;
     if (controls === null) return;
-    const { game, introDone, finishIntro } = useStore.getState();
+    const { game, introDone, finishIntro, cameraMode } = useStore.getState();
 
     // --- intro cinematic ---
     if (mode.current === 'intro') {
@@ -191,23 +197,14 @@ export function CameraDirector() {
       return;
     }
 
-    // --- user mode: clamps + phase-driven camera focus ---
+    // --- user mode: clamps + selectable camera point-of-view ---
     const target = controls.target;
-    const following =
-      !registry.userDragging && (game.phase === 'TOKEN_MOVING' || game.phase === 'RESOLVING_JUMP');
+    const phase = game.phase;
+    const token = registry.tokens[game.current];
+    const hasToken = token !== null && token !== undefined;
+    const moving = !registry.userDragging && (phase === 'TOKEN_MOVING' || phase === 'RESOLVING_JUMP');
 
-    if (!registry.userDragging && game.phase === 'DICE_ROLLING' && registry.diceTrayPos !== null) {
-      // Focus on the rolling die (front tray, outside the normal pan radius).
-      target.lerp(registry.diceTrayPos, Math.min(1, dt * 2));
-    } else if (following) {
-      // Lock focus onto the moving pawn (framed on its body, not the floor).
-      const token = registry.tokens[game.current];
-      if (token !== null && token !== undefined) {
-        tmpV.set(token.position.x, 0.45, token.position.z);
-        target.lerp(tmpV, Math.min(1, dt * 2.4));
-      }
-    } else {
-      // Between turns / free look: clamp the pan, then ease back to the board center.
+    const clampPan = (): void => {
       const flat = Math.hypot(target.x, target.z);
       if (flat > PAN_RADIUS) {
         const k = PAN_RADIUS / flat;
@@ -215,17 +212,61 @@ export function CameraDirector() {
         target.z *= k;
       }
       target.y = Math.max(-0.5, Math.min(1.5, target.y));
+    };
+
+    // FREE: pure manual orbit — clamps only, no auto-focus or dolly.
+    if (cameraMode === 'free') {
+      controls.enabled = true;
+      clampPan();
+      cineDist.current = null;
+      controls.update();
+      return;
+    }
+
+    // FOLLOW (single-person POV): over-the-shoulder, ONLY while the piece is acting on
+    // the board. Camera swings behind the piece along its travel direction.
+    if (cameraMode === 'follow' && moving && hasToken) {
+      controls.enabled = false;
+      tmpV.copy(token.position).sub(lastPiece.current);
+      lastPiece.current.copy(token.position);
+      if (Math.hypot(tmpV.x, tmpV.z) > 0.0005) {
+        let dAz = Math.atan2(tmpV.x, tmpV.z) + Math.PI - followAz.current; // behind = +π
+        while (dAz > Math.PI) dAz -= Math.PI * 2;
+        while (dAz < -Math.PI) dAz += Math.PI * 2;
+        followAz.current += dAz * Math.min(1, dt * 3);
+      }
+      tmpFocus.set(token.position.x, 0.6, token.position.z); // frame the upper body
+      target.lerp(tmpFocus, Math.min(1, dt * 4));
+      tmpS.set(FOLLOW_RADIUS, FOLLOW_POLAR, followAz.current);
+      camera.position.setFromSpherical(tmpS).add(target);
+      camera.lookAt(target);
+      cineDist.current = null;
+      return;
+    }
+    if (hasToken) lastPiece.current.copy(token.position); // keep direction seed fresh
+
+    // CINEMATIC director (and FOLLOW between turns): close up on the die when idle or
+    // rolling, then track + push in to the piece while it travels — and back to the die.
+    controls.enabled = true;
+    if (!registry.userDragging && (phase === 'AWAITING_ROLL' || phase === 'DICE_ROLLING') && registry.diceTrayPos !== null) {
+      target.lerp(registry.diceTrayPos, Math.min(1, dt * 2));
+    } else if (moving && hasToken) {
+      tmpV.set(token.position.x, 0.45, token.position.z);
+      target.lerp(tmpV, Math.min(1, dt * 2.4));
+    } else {
+      clampPan();
       if (!registry.userDragging) target.lerp(tmpV.set(0, 0, 0), Math.min(1, dt * 1.4));
     }
 
-    // Cinematic push-in: dolly close to the pawn while it travels, then ease back to
-    // the resting distance once it settles. Never fights an active drag.
+    // Cinematic dolly: push in close (to the die or the piece), ease back otherwise.
     if (!registry.userDragging) {
+      const focusing = phase === 'AWAITING_ROLL' || phase === 'DICE_ROLLING' || moving;
+      const wantDist = moving ? CINEMATIC_DIST : DIE_DIST;
       tmpOffset.copy(camera.position).sub(target);
       const dist = tmpOffset.length();
-      if (following) {
+      if (focusing) {
         if (cineDist.current === null) cineDist.current = dist;
-        const next = dist + (CINEMATIC_DIST - dist) * Math.min(1, dt * 1.8);
+        const next = dist + (wantDist - dist) * Math.min(1, dt * 1.8);
         camera.position.copy(target).add(tmpOffset.setLength(next));
       } else if (cineDist.current !== null) {
         const next = dist + (cineDist.current - dist) * Math.min(1, dt * 1.8);
