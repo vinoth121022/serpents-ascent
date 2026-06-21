@@ -19,6 +19,7 @@ const DIST_MAX = 22;
 const PAN_RADIUS = 4;
 const CINEMATIC_DIST = 8.5; // dolly-in distance while a pawn is travelling
 const DIE_DIST = 7; // dolly-in distance for the die close-up between/after turns
+const STRAIGHT_POLAR = 58 * DEG; // die close-up is a level, front-on (azimuth 0) straight view
 const FOLLOW_RADIUS = 2.6; // single-person POV: how far behind the piece
 const FOLLOW_POLAR = 62 * DEG; // single-person POV: behind + slightly above, looking forward
 const INTRO_FROM = new Spherical(21.5, 20 * DEG, -38 * DEG);
@@ -245,30 +246,45 @@ export function CameraDirector() {
     }
     if (hasToken) lastPiece.current.copy(token.position); // keep direction seed fresh
 
-    // CINEMATIC director (and FOLLOW between turns): close up on the die when idle or
-    // rolling, then track + push in to the piece while it travels — and back to the die.
+    // CINEMATIC director (and FOLLOW between turns). The cycle: a STRAIGHT, front-on
+    // close-up on the die when idle/rolling → track + push in to the piece while it
+    // travels → back to the straight die close-up when it arrives.
     controls.enabled = true;
-    if (!registry.userDragging && (phase === 'AWAITING_ROLL' || phase === 'DICE_ROLLING') && registry.diceTrayPos !== null) {
-      target.lerp(registry.diceTrayPos, Math.min(1, dt * 2));
+    const die = registry.diceTrayPos;
+    if (
+      !registry.userDragging &&
+      (phase === 'AWAITING_ROLL' || phase === 'DICE_ROLLING') &&
+      die !== null
+    ) {
+      // Straighten the view: glide target onto the die and the rig to azimuth 0,
+      // a level polar, and the close-up distance — a consistent front-on shot.
+      target.lerp(die, Math.min(1, dt * 2.5));
+      tmpS.setFromVector3(tmpOffset.copy(camera.position).sub(target));
+      const k = Math.min(1, dt * 2.2);
+      tmpS.radius += (DIE_DIST - tmpS.radius) * k;
+      tmpS.phi += (STRAIGHT_POLAR - tmpS.phi) * k;
+      let dTheta = -tmpS.theta;
+      while (dTheta > Math.PI) dTheta -= Math.PI * 2;
+      while (dTheta < -Math.PI) dTheta += Math.PI * 2;
+      tmpS.theta += dTheta * k;
+      camera.position.setFromSpherical(tmpS).add(target);
+      cineDist.current = null;
     } else if (moving && hasToken) {
+      // Track + push in to the moving piece.
       tmpV.set(token.position.x, 0.45, token.position.z);
       target.lerp(tmpV, Math.min(1, dt * 2.4));
-    } else {
-      clampPan();
-      if (!registry.userDragging) target.lerp(tmpV.set(0, 0, 0), Math.min(1, dt * 1.4));
-    }
-
-    // Cinematic dolly: push in close (to the die or the piece), ease back otherwise.
-    if (!registry.userDragging) {
-      const focusing = phase === 'AWAITING_ROLL' || phase === 'DICE_ROLLING' || moving;
-      const wantDist = moving ? CINEMATIC_DIST : DIE_DIST;
       tmpOffset.copy(camera.position).sub(target);
       const dist = tmpOffset.length();
-      if (focusing) {
-        if (cineDist.current === null) cineDist.current = dist;
-        const next = dist + (wantDist - dist) * Math.min(1, dt * 1.8);
-        camera.position.copy(target).add(tmpOffset.setLength(next));
-      } else if (cineDist.current !== null) {
+      if (cineDist.current === null) cineDist.current = dist;
+      const next = dist + (CINEMATIC_DIST - dist) * Math.min(1, dt * 1.8);
+      camera.position.copy(target).add(tmpOffset.setLength(next));
+    } else {
+      // Free look / between states: clamp, ease back to centre + resting distance.
+      clampPan();
+      if (!registry.userDragging) target.lerp(tmpV.set(0, 0, 0), Math.min(1, dt * 1.4));
+      if (cineDist.current !== null && !registry.userDragging) {
+        tmpOffset.copy(camera.position).sub(target);
+        const dist = tmpOffset.length();
         const next = dist + (cineDist.current - dist) * Math.min(1, dt * 1.8);
         camera.position.copy(target).add(tmpOffset.setLength(next));
         if (Math.abs(next - cineDist.current) < 0.05) cineDist.current = null;

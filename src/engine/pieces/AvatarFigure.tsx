@@ -1,7 +1,7 @@
 import { useAnimations, useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Box3, Group, LoopRepeat, Mesh, Object3D, Vector3 } from 'three';
+import { Box3, Group, LoopOnce, LoopRepeat, Mesh, Object3D, Vector3 } from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { useStore } from '../../store';
 import { registry } from '../registry';
@@ -9,23 +9,32 @@ import { registry } from '../registry';
 const MODEL = '/models/avatar.glb';
 const TARGET_HEIGHT = 1.2; // a real person, sized to stand tall above its tile
 const FACING = 0; // model forward offset (tuned so it faces its travel direction)
-const WALK_TIMESCALE = 0.85; // a slow, deliberate walk
-const CLIMB_CLIP = 'Ladder_Climb_Loop'; // real rung-by-rung climb, loops for any ladder length
-const CLIMB_TIMESCALE = 0.6; // slow, deliberate climb (lower = slower limbs)
-const CLIMB_LEAN = 0.6; // forward body pitch (rad) so the vertical climb clip leans up the flat ladder
-const FADE = 0.18; // crossfade seconds between walk and climb
-useGLTF.preload(MODEL);
+const CLIMB_LEAN = 0.6; // forward body pitch so the upright climb clip reads up the flat ladder
+const FADE = 0.18; // crossfade seconds between clips
+
+// Clip names in the model, mapped to game states.
+const CLIP = {
+  idle: 'Standing_Reload', // alive standing idle
+  walk: 'Walking',
+  climb: 'Slow_Ladder_Climb',
+  snake: 'Jump_Over_Obstacle_2', // crossing/sliding a snake
+  cheer: 'happy_jump_m', // celebrate at the top of a ladder
+  win: 'Backflip',
+} as const;
+const TIMESCALE: Record<string, number> = { [CLIP.walk]: 0.85, [CLIP.climb]: 0.6 };
+
+useGLTF.preload(MODEL, false, true);
 
 const _world = new Vector3();
 const _box = new Box3();
 const _size = new Vector3();
 
-/** Real human GLB token: walks while moving, plays a real ladder-climb clip while
- * scaling a ladder, faces the travel direction, and backflips when its player wins.
- * Cloned per player so each instance has an independent skeleton. */
+/** Real human GLB token with a small animation state machine: stands (Standing_Reload)
+ * when idle, walks when moving, plays a slow ladder climb and a happy jump at the top,
+ * a jump-over-obstacle while crossing a snake, and a backflip on win. Cloned per player. */
 export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
   const root = useRef<Group>(null);
-  const { scene, animations } = useGLTF(MODEL);
+  const { scene, animations } = useGLTF(MODEL, false, true);
   const phase = useStore((s) => s.game.phase);
   const winner = useStore((s) => s.game.winner);
 
@@ -35,8 +44,7 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
     clone.updateMatrixWorld(true);
     _box.setFromObject(clone, true); // precise: posed skinned vertices
     _box.getSize(_size);
-    const nativeH = _size.y || 1;
-    const s = TARGET_HEIGHT / nativeH;
+    const s = TARGET_HEIGHT / (_size.y || 1);
     clone.scale.setScalar(s);
     clone.updateMatrixWorld(true);
     _box.setFromObject(clone, true);
@@ -51,38 +59,32 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
 
   const last = useRef(new Vector3());
   const inited = useRef(false);
-  const flipped = useRef(false);
+  const current = useRef(''); // currently playing clip
   const wasClimbing = useRef(false);
+  const cheerTimer = useRef(0); // seconds of "happy jump" left after a climb
 
-  const startWalk = useCallback((): void => {
-    const walk = actions['Walking'];
-    if (walk) {
-      walk.reset().play();
-      walk.setEffectiveWeight(1);
-      walk.timeScale = WALK_TIMESCALE;
-      walk.paused = true; // stand in a natural arms-down walk frame, never a T-pose
-    }
-  }, [actions]);
+  // Crossfade to a clip (no-op if already playing it).
+  const playClip = useCallback(
+    (name: string, loop: boolean): void => {
+      if (current.current === name) return;
+      const next = actions[name];
+      if (!next) return;
+      actions[current.current]?.fadeOut(FADE);
+      next.reset();
+      next.setLoop(loop ? LoopRepeat : LoopOnce, loop ? Infinity : 1);
+      next.clampWhenFinished = !loop;
+      next.timeScale = TIMESCALE[name] ?? 1;
+      next.setEffectiveWeight(1);
+      next.fadeIn(FADE).play();
+      current.current = name;
+    },
+    [actions],
+  );
 
-  useEffect(() => startWalk(), [startWalk]);
+  // Stand the moment the clips are ready (avoids a one-frame bind/T-pose).
+  useEffect(() => playClip(CLIP.idle, true), [playClip]);
 
-  // Backflip on win, return to idle on a new match.
-  useEffect(() => {
-    const flip = actions['Backflip'];
-    const walk = actions['Walking'];
-    if (phase === 'WIN' && winner === playerIndex && flip && !flipped.current) {
-      flipped.current = true;
-      walk?.fadeOut(0.2);
-      actions[CLIMB_CLIP]?.fadeOut(0.2);
-      flip.reset().setLoop(LoopRepeat, Infinity).fadeIn(0.2).play();
-    } else if (phase !== 'WIN' && flipped.current) {
-      flipped.current = false;
-      flip?.stop();
-      startWalk();
-    }
-  }, [phase, winner, playerIndex, actions, startWalk]);
-
-  useFrame((state, dt) => {
+  useFrame((_, dt) => {
     const g = root.current;
     if (g === null) return;
     g.getWorldPosition(_world);
@@ -97,53 +99,35 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
     const moved = Math.hypot(dx, dz);
     const d = Math.min(dt, 0.05);
 
-    const climbing = !flipped.current && registry.movingToken === playerIndex && registry.movementMode === 'climb';
-    const walk = actions['Walking'];
-    const climb = actions[CLIMB_CLIP];
+    const winningMe = phase === 'WIN' && winner === playerIndex;
+    const active = registry.movingToken === playerIndex;
+    const mode = active ? registry.movementMode : null;
+    const climbing = mode === 'climb';
 
-    if (climbing && !wasClimbing.current) {
-      // Hand off to the real climb clip.
-      wasClimbing.current = true;
-      walk?.fadeOut(FADE);
-      if (climb) {
-        climb.reset().setLoop(LoopRepeat, Infinity);
-        climb.timeScale = CLIMB_TIMESCALE;
-        climb.setEffectiveWeight(1);
-        climb.fadeIn(FADE).play();
-      }
-    } else if (!climbing && wasClimbing.current) {
-      // Back to the walk clip once the ladder is cleared.
-      wasClimbing.current = false;
-      climb?.fadeOut(FADE);
-      startWalk();
-      walk?.fadeIn(FADE);
+    // Celebrate at the top of a ladder: a climb that just ended fires a one-shot happy jump.
+    if (wasClimbing.current && !climbing && !winningMe) {
+      cheerTimer.current = actions[CLIP.cheer]?.getClip().duration ?? 0.9;
     }
+    wasClimbing.current = climbing;
+    if (cheerTimer.current > 0) cheerTimer.current -= dt;
 
-    // Walk while moving, freeze (stand) when idle — never a T-pose (skip during climb/win).
-    const idle = !flipped.current && !climbing && moved <= 0.0006;
-    if (walk && !flipped.current && !climbing) walk.paused = idle;
+    // Pick the clip for the current state.
+    let want: string = CLIP.idle;
+    let loop = true;
+    if (winningMe) want = CLIP.win;
+    else if (climbing) want = CLIP.climb;
+    else if (mode === 'slide') want = CLIP.snake;
+    else if (cheerTimer.current > 0) {
+      want = CLIP.cheer;
+      loop = false;
+    } else if (mode === 'walk') want = CLIP.walk;
+    playClip(want, loop);
 
-    // Alive idle "groove" — a rhythmic bounce + weight-shift sway (per-player phase) so
-    // a waiting piece reads as alive and dancing, never a dead statue. Eased out when it
-    // starts moving so the walk stays clean.
-    if (idle) {
-      const gt = (state.clock.elapsedTime + playerIndex * 1.7) * 5.4;
-      g.position.y = Math.abs(Math.sin(gt)) * 0.05; // bouncy beat
-      g.position.x = Math.sin(gt * 0.5) * 0.025; // step side-to-side
-      g.rotation.z = Math.sin(gt * 0.5) * 0.1; // lean / weight shift
-    } else {
-      const k = Math.min(1, d * 10);
-      g.position.y += -g.position.y * k;
-      g.position.x += -g.position.x * k;
-      g.rotation.z += -g.rotation.z * k;
-    }
-
-    // Lean forward into the rungs while climbing so the upright climb clip reads as
-    // clambering up the (flat) ladder; ease back to upright otherwise.
+    // Lean forward into the rungs while climbing; ease back to upright otherwise.
     g.rotation.x += ((climbing ? CLIMB_LEAN : 0) - g.rotation.x) * Math.min(1, d * 5);
 
-    // Turn to face the direction of travel.
-    if (moved > 0.0009 && !flipped.current) {
+    // Turn to face the direction of travel while moving.
+    if (moved > 0.0009 && !winningMe) {
       let dy = Math.atan2(dx, dz) + FACING - g.rotation.y;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
