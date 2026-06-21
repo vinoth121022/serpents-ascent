@@ -1,150 +1,97 @@
+import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
-import { AdditiveBlending, Color, Group, Mesh, Quaternion, Vector3 } from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { BoardDefinition } from '../../core';
+import { Box3, Color, Group, Mesh, type MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
+import { cellToWorld, type BoardDefinition } from '../../core';
 import { registry } from '../registry';
 import type { Theme } from '../theme/themes';
-import { buildSnakeCurve, buildTaperedTube } from './snakeGeometry';
 
-interface HeadPose {
-  position: Vector3;
-  quaternion: Quaternion;
-  color: string;
-}
+const SNAKE_MODEL = '/models/snake.glb';
+const THICKNESS = 0.42; // world body diameter the model is scaled to
+const SNAKE_LIFT = 0.16; // belly height — drapes the snake OVER the ladders (no clipping)
+const FORWARD = new Vector3(0, 0, 1); // the model's long axis (measured: length runs along Z)
+
+useGLTF.preload(SNAKE_MODEL, false, true); // meshopt-compressed
 
 /**
- * All snake bodies merge into ONE vertex-colored geometry (1 draw call); heads,
- * eyes and tongues are small per-snake groups. Splines register in the registry
- * so the choreographer can slide tokens down the real body.
+ * Board snakes are instances of a real textured corn-snake GLB. The model has no
+ * skeleton, so each snake is a clone stretched along the straight head→tail line
+ * (scaled to span the distance, fixed body thickness), tinted a distinct theme hue,
+ * and lifted to lie OVER the ladders rather than clipping through them.
  */
 export function Snakes({ board, theme }: { board: BoardDefinition; theme: Theme }) {
+  const { scene } = useGLTF(SNAKE_MODEL, false, true);
   const breatheRef = useRef<Group>(null);
-  const headRefs = useRef<(Group | null)[]>([]);
-  const tongueRefs = useRef<(Mesh | null)[]>([]);
 
-  const { bodyGeometry, shellGeometry, heads } = useMemo(() => {
-    const snakes = board.jumps.filter((j) => j.kind === 'snake');
+  // Measure the model once (its real, dequantized size + centre).
+  const dims = useMemo(() => {
+    const box = new Box3().setFromObject(scene);
+    const size = new Vector3();
+    const center = new Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+    return { size, center };
+  }, [scene]);
+
+  const { instances, materials } = useMemo(() => {
     registry.snakeCurves.clear();
-    const tubes = [];
-    const shells = [];
-    const heads: HeadPose[] = [];
-    const up = new Vector3(0, 1, 0);
-    for (let i = 0; i < snakes.length; i++) {
-      const jump = snakes[i];
-      if (jump === undefined) continue;
-      const color = theme.snakeColors[i % theme.snakeColors.length] ?? '#3e8a5f';
-      const curve = buildSnakeCurve(jump.from, jump.to);
-      registry.snakeCurves.set(jump.from, curve);
-      tubes.push(buildTaperedTube(curve, new Color(color)));
-      // Radially inflated copy for the additive self-glow shell — a uniform mesh
-      // scale would shift, not inflate, so the shell is baked at a larger radius.
-      shells.push(buildTaperedTube(curve, new Color(color), 72, 10, 0.118, 0.036));
+    const length = dims.size.z || 1;
+    const girth = Math.max(dims.size.x, dims.size.y) || 1;
+    const materials: MeshStandardMaterial[] = [];
+    const instances = board.jumps
+      .filter((j) => j.kind === 'snake')
+      .map((jump, i) => {
+        const h = cellToWorld(jump.from);
+        const t = cellToWorld(jump.to);
+        const a = new Vector3(h.x, 0, h.z); // head cell
+        const b = new Vector3(t.x, 0, t.z); // tail cell
+        const span = a.distanceTo(b);
+        // The model's head is at its +Z end, so point +Z toward the head cell.
+        const dir = new Vector3().subVectors(a, b).normalize();
+        const quaternion = new Quaternion().setFromUnitVectors(FORWARD, dir);
+        const vary = 0.9 + (((i * 37) % 17) / 100) * 1.2; // 0.9..1.1 size variety per snake
+        const sxy = (THICKNESS / girth) * vary;
+        const sz = span / length;
+        // One consistent hue across ALL of a snake's meshes (its "pieces" stay one style).
+        // A bright base + low emissive lifts the dark scale texture so the colour reads.
+        const hue = new Color(theme.snakeColors[i % theme.snakeColors.length] ?? '#3e8a5f');
+        const obj = scene.clone(true) as Object3D;
+        obj.position.sub(dims.center); // recentre so the body straddles the line
+        obj.traverse((o) => {
+          const mesh = o as Mesh;
+          if (!mesh.isMesh) return;
+          mesh.castShadow = true;
+          const src = mesh.material as MeshStandardMaterial;
+          const m = src.clone();
+          if (m.color) m.color.copy(hue).multiplyScalar(1.9);
+          if (m.emissive) {
+            m.emissive.copy(hue);
+            m.emissiveIntensity = 0.32;
+          }
+          mesh.material = m;
+          materials.push(m);
+        });
+        const position = new Vector3().addVectors(a, b).multiplyScalar(0.5);
+        position.y = SNAKE_LIFT + (dims.size.y * sxy) / 2; // belly clears the ladders
+        return { key: jump.from, obj, position, quaternion, scale: new Vector3(sxy, sxy, sz) };
+      });
+    return { instances, materials };
+  }, [board, scene, dims, theme]);
 
-      // Head: oriented against the travel direction, tilted slightly up.
-      const p0 = curve.getPointAt(0);
-      const tangent = curve.getTangentAt(0).negate();
-      tangent.y = Math.max(tangent.y, 0.15);
-      tangent.normalize();
-      const quaternion = new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), tangent);
-      const lift = new Quaternion().setFromAxisAngle(up, 0);
-      heads.push({ position: p0, quaternion: quaternion.multiply(lift), color });
-    }
-    const merged = mergeGeometries(tubes, false);
-    const mergedShell = mergeGeometries(shells, false);
-    for (const t of tubes) t.dispose();
-    for (const s of shells) s.dispose();
-    return { bodyGeometry: merged, shellGeometry: mergedShell, heads };
-  }, [board, theme]);
+  // Free the per-snake material clones when the board/theme changes.
+  useEffect(() => () => materials.forEach((m) => m.dispose()), [materials]);
 
-  useEffect(() => {
-    return () => {
-      bodyGeometry.dispose();
-      shellGeometry.dispose();
-    };
-  }, [bodyGeometry, shellGeometry]);
-
-  // Idle life: breathing body + heads that look around / nod, and flicking tongues —
-  // each snake on its own phase so they feel like separate live creatures.
+  // Subtle, shear-free breathing keeps the rigid models feeling alive.
   useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
     const g = breatheRef.current;
-    if (g !== null) {
-      const s = 1 + Math.sin(t * Math.PI * 0.8) * 0.02;
-      g.scale.set(1, s, 1);
-    }
-    for (let i = 0; i < headRefs.current.length; i++) {
-      const head = headRefs.current[i];
-      if (head !== null && head !== undefined) {
-        head.rotation.y = Math.sin(t * 1.05 + i * 1.3) * 0.2; // glance left/right
-        head.rotation.x = Math.sin(t * 0.75 + i * 0.7) * 0.09; // gentle nod
-        head.position.y = Math.sin(t * 0.9 + i) * 0.015; // rise and fall
-      }
-      const tongue = tongueRefs.current[i];
-      if (tongue !== null && tongue !== undefined) {
-        const dart = Math.max(0, Math.sin(t * 2.2 + i * 2.1));
-        tongue.scale.y = 0.15 + 0.85 * dart * dart; // quick flick in and out
-      }
-    }
+    if (g !== null) g.scale.setScalar(1 + Math.sin(clock.elapsedTime * Math.PI * 0.8) * 0.012);
   });
 
   return (
-    <group>
-      <group ref={breatheRef}>
-        <mesh geometry={bodyGeometry} castShadow>
-          <meshStandardMaterial vertexColors roughness={0.55} metalness={0.0} envMapIntensity={0.65} />
-        </mesh>
-        {theme.snakeEmissiveIntensity > 0 && (
-          // Additive shell = saturation lift + self-glow (DECISIONS.md #9)
-          <mesh geometry={shellGeometry}>
-            <meshBasicMaterial
-              vertexColors
-              transparent
-              opacity={theme.snakeEmissiveIntensity}
-              blending={AdditiveBlending}
-              depthWrite={false}
-            />
-          </mesh>
-        )}
-      </group>
-      {heads.map((head, i) => (
-        <group key={i} position={head.position} quaternion={head.quaternion}>
-          {/* inner group is animated each frame (glance / nod / bob) — the snake is alive */}
-          <group
-            ref={(g) => {
-              headRefs.current[i] = g;
-            }}
-          >
-            {/* flattened, elongated reptilian head */}
-            <mesh scale={[1.25, 0.6, 1.95]} castShadow>
-              <sphereGeometry args={[0.14, 18, 14]} />
-              <meshStandardMaterial color={head.color} roughness={0.5} metalness={0.0} envMapIntensity={0.65} />
-            </mesh>
-            {/* eyes */}
-            {[-1, 1].map((side) => (
-              <group key={side} position={[side * 0.085, 0.07, 0.06]}>
-                <mesh>
-                  <sphereGeometry args={[0.035, 10, 8]} />
-                  <meshStandardMaterial color="#f6f3e6" roughness={0.25} />
-                </mesh>
-                <mesh position={[0, 0.012, 0.022]}>
-                  <sphereGeometry args={[0.016, 8, 6]} />
-                  <meshStandardMaterial color="#181410" roughness={0.2} />
-                </mesh>
-              </group>
-            ))}
-            {/* forked tongue — flicks in and out */}
-            <mesh
-              ref={(m) => {
-                tongueRefs.current[i] = m;
-              }}
-              position={[0, -0.01, 0.3]}
-              rotation={[-0.25, 0, 0]}
-            >
-              <planeGeometry args={[0.05, 0.18]} />
-              <meshBasicMaterial color="#c83a4a" side={2} />
-            </mesh>
-          </group>
+    <group ref={breatheRef}>
+      {instances.map((inst) => (
+        <group key={inst.key} position={inst.position} quaternion={inst.quaternion} scale={inst.scale}>
+          <primitive object={inst.obj} />
         </group>
       ))}
     </group>

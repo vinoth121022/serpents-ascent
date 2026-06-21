@@ -19,7 +19,7 @@ const DIST_MAX = 22;
 const PAN_RADIUS = 4;
 const CINEMATIC_DIST = 8.5; // dolly-in distance while a pawn is travelling
 const DIE_DIST = 7; // dolly-in distance for the die close-up between/after turns
-const STRAIGHT_POLAR = 58 * DEG; // die close-up is a level, front-on (azimuth 0) straight view
+const STRAIGHT_POLAR = 50 * DEG; // die close-up is a front-on (azimuth 0) view at a 50° angle
 const FOLLOW_RADIUS = 2.6; // single-person POV: how far behind the piece
 const FOLLOW_POLAR = 62 * DEG; // single-person POV: behind + slightly above, looking forward
 const INTRO_FROM = new Spherical(21.5, 20 * DEG, -38 * DEG);
@@ -69,6 +69,9 @@ export function CameraDirector() {
   const cineDist = useRef<number | null>(null); // resting distance to restore after a push-in
   const followAz = useRef(0); // smoothed over-the-shoulder azimuth (follow POV)
   const lastPiece = useRef(new Vector3()); // previous piece position → travel direction
+  const postHold = useRef(0); // seconds left to linger on a piece after its move, before the die
+  const lastMoved = useRef(0); // index of the piece that most recently moved
+  const prevPhase = useRef(''); // previous frame's phase, to detect move→idle transitions
 
   // Apply the intro start pose immediately so frame 1 is the establishing shot.
   useEffect(() => {
@@ -205,6 +208,15 @@ export function CameraDirector() {
     const hasToken = token !== null && token !== undefined;
     const moving = !registry.userDragging && (phase === 'TOKEN_MOVING' || phase === 'RESOLVING_JUMP');
 
+    // Remember which piece is moving; when a move finishes (→ AWAITING_ROLL) start a 1s
+    // linger before the camera swings back to the die.
+    if (registry.movingToken !== null) lastMoved.current = registry.movingToken;
+    if (phase === 'AWAITING_ROLL' && prevPhase.current !== 'AWAITING_ROLL') {
+      postHold.current =
+        prevPhase.current === 'TOKEN_MOVING' || prevPhase.current === 'RESOLVING_JUMP' ? 1 : 0;
+    }
+    prevPhase.current = phase;
+
     const clampPan = (): void => {
       const flat = Math.hypot(target.x, target.z);
       if (flat > PAN_RADIUS) {
@@ -222,6 +234,24 @@ export function CameraDirector() {
       cineDist.current = null;
       controls.update();
       return;
+    }
+
+    // ENJOYMENT: while a piece celebrates (the happy jump at a ladder top), hold the
+    // camera on it and push in; the cycle returns to the die once the celebration ends.
+    if (registry.celebrating !== null && !registry.userDragging) {
+      const celeb = registry.tokens[registry.celebrating];
+      if (celeb !== null && celeb !== undefined) {
+        controls.enabled = true;
+        tmpV.set(celeb.position.x, 0.6, celeb.position.z);
+        target.lerp(tmpV, Math.min(1, dt * 2.4));
+        tmpOffset.copy(camera.position).sub(target);
+        const dist = tmpOffset.length();
+        if (cineDist.current === null) cineDist.current = dist;
+        const next = dist + (CINEMATIC_DIST - dist) * Math.min(1, dt * 1.8);
+        camera.position.copy(target).add(tmpOffset.setLength(next));
+        controls.update();
+        return;
+      }
     }
 
     // FOLLOW (single-person POV): over-the-shoulder, ONLY while the piece is acting on
@@ -245,6 +275,24 @@ export function CameraDirector() {
       return;
     }
     if (hasToken) lastPiece.current.copy(token.position); // keep direction seed fresh
+
+    // POST-MOVE LINGER: after a move lands, hold on that piece for ~3s before falling
+    // through to the die close-up — every move gets a beat to breathe.
+    if (phase === 'AWAITING_ROLL' && postHold.current > 0 && !registry.userDragging) {
+      postHold.current -= dt;
+      const held = registry.tokens[lastMoved.current];
+      if (held !== null && held !== undefined) {
+        controls.enabled = true;
+        tmpV.set(held.position.x, 0.5, held.position.z);
+        target.lerp(tmpV, Math.min(1, dt * 2.2));
+        tmpOffset.copy(camera.position).sub(target);
+        const dist = tmpOffset.length();
+        const next = dist + (CINEMATIC_DIST - dist) * Math.min(1, dt * 1.2);
+        camera.position.copy(target).add(tmpOffset.setLength(next));
+        controls.update();
+        return;
+      }
+    }
 
     // CINEMATIC director (and FOLLOW between turns). The cycle: a STRAIGHT, front-on
     // close-up on the die when idle/rolling → track + push in to the piece while it

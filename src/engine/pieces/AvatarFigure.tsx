@@ -14,7 +14,7 @@ const FADE = 0.18; // crossfade seconds between clips
 
 // Clip names in the model, mapped to game states.
 const CLIP = {
-  idle: 'Standing_Reload', // alive standing idle
+  idle: 'Stand_and_Chat', // alive, gesturing idle while waiting its turn
   walk: 'Walking',
   climb: 'Slow_Ladder_Climb',
   snake: 'Jump_Over_Obstacle_2', // crossing/sliding a snake
@@ -84,7 +84,7 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
   // Stand the moment the clips are ready (avoids a one-frame bind/T-pose).
   useEffect(() => playClip(CLIP.idle, true), [playClip]);
 
-  useFrame((_, dt) => {
+  useFrame((st, dt) => {
     const g = root.current;
     if (g === null) return;
     g.getWorldPosition(_world);
@@ -109,7 +109,13 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
       cheerTimer.current = actions[CLIP.cheer]?.getClip().duration ?? 0.9;
     }
     wasClimbing.current = climbing;
-    if (cheerTimer.current > 0) cheerTimer.current -= dt;
+    // Tell the camera to hold on this piece while it enjoys the celebration.
+    if (cheerTimer.current > 0) {
+      cheerTimer.current -= dt;
+      registry.celebrating = playerIndex;
+    } else if (registry.celebrating === playerIndex) {
+      registry.celebrating = null;
+    }
 
     // Pick the clip for the current state.
     let want: string = CLIP.idle;
@@ -126,12 +132,18 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
     // Lean forward into the rungs while climbing; ease back to upright otherwise.
     g.rotation.x += ((climbing ? CLIMB_LEAN : 0) - g.rotation.x) * Math.min(1, d * 5);
 
-    // Turn to face the direction of travel while moving.
-    if (moved > 0.0009 && !winningMe) {
-      let dy = Math.atan2(dx, dz) + FACING - g.rotation.y;
+    // Facing: while actually walking/climbing/sliding the piece faces its travel
+    // direction; the moment it stops (idle, celebrating, after any move) it turns back
+    // to face the camera, so the figure always "presents" to the viewer at rest.
+    const traversing = (mode === 'walk' || mode === 'climb' || mode === 'slide') && moved > 0.0009;
+    if (!winningMe) {
+      const targetYaw = traversing
+        ? Math.atan2(dx, dz) + FACING
+        : Math.atan2(st.camera.position.x - _world.x, st.camera.position.z - _world.z) + FACING;
+      let dy = targetYaw - g.rotation.y;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
-      g.rotation.y += dy * Math.min(1, d * 8);
+      g.rotation.y += dy * Math.min(1, d * (traversing ? 8 : 5));
     }
   });
 

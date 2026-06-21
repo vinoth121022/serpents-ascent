@@ -18,7 +18,8 @@ const SETTLE_LIN = 0.7; // still some travel
 const SETTLE_ANG = 2.4; // still rotating slowly
 const SETTLE_FLOOR = 0.12; // must be resting near the tray floor (not mid-bounce)
 const SETTLE_MIN_AIR = 0.45; // ignore the throw + first bounces
-const HARD_TIMEOUT = 3.5;
+const STILL_SETTLE = 0.3; // low-energy but not flat-on-floor (corner-rested) → flatten after this
+const HARD_TIMEOUT = 2.2; // final backstop if it somehow never reads as still
 const SETTLE_SECONDS = 0.3; // quick eased steer that merges with the deceleration
 
 const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
@@ -126,6 +127,7 @@ function Die({ layout, theme }: { layout: TrayLayout; theme: Theme }) {
   const slerpTo = useRef(new Quaternion());
   const settledFace = useRef(0);
   const bounced = useRef(false);
+  const stillTime = useRef(0); // how long the die has been low-energy
   const settleFromPos = useRef(new Vector3());
   const settleToPos = useRef(new Vector3());
 
@@ -166,6 +168,7 @@ function Die({ layout, theme }: { layout: TrayLayout; theme: Theme }) {
         mode.current = 'flying';
         airTime.current = 0;
         bounced.current = false;
+        stillTime.current = 0;
         soundBus.play('roll');
       }),
     [layout],
@@ -224,10 +227,19 @@ function Die({ layout, theme }: { layout: TrayLayout; theme: Theme }) {
       const spin = Math.hypot(av.x, av.y, av.z);
       const target = must(useStore.getState().game.turn.die, 'flying die with no core value');
       const onFloor = body.translation().y < FLOOR_TOP + HALF + SETTLE_FLOOR;
-      if (airTime.current > SETTLE_MIN_AIR && onFloor && speed < SETTLE_LIN && spin < SETTLE_ANG) {
+      const lowEnergy = speed < SETTLE_LIN && spin < SETTLE_ANG;
+      stillTime.current = lowEnergy ? stillTime.current + dt : 0;
+      if (airTime.current > SETTLE_MIN_AIR && lowEnergy && onFloor) {
+        // Ideal: came to rest flat on the tray floor.
+        beginReconcile(target, body.rotation() as Quat);
+      } else if (airTime.current > SETTLE_MIN_AIR && stillTime.current > STILL_SETTLE) {
+        // Came to rest balanced on a corner/edge (not flat) — flatten in place NOW rather
+        // than letting the die sit there until the hard timeout (the "stuck die" bug).
+        body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+        body.setAngvel({ x: 0, y: 0, z: 0 }, false);
         beginReconcile(target, body.rotation() as Quat);
       } else if (airTime.current > HARD_TIMEOUT) {
-        // Stuck on an edge/corner — force-settle (spec §7 hard timeout).
+        // Still tumbling after the backstop window — snap home and settle.
         body.setLinvel({ x: 0, y: 0, z: 0 }, false);
         body.setAngvel({ x: 0, y: 0, z: 0 }, false);
         body.setTranslation(restPosition, false);

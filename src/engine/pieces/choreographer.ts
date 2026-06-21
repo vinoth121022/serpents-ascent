@@ -11,8 +11,8 @@ export const TIMING = {
   ladderApproach: 0.3,
   ladderPerRung: 0.36, // slow, deliberate rung-by-rung ascent
 
-  snakeGrab: 0.2,
-  snakeSlide: 1.4,
+  snakeShrink: 0.62, // bite: the piece slowly shrinks away at the head cell
+  snakeGrow: 0.85, // slowly re-materialises (pops up) on the destination tile
 } as const;
 
 /** Off-board home pads along the left edge of the table. */
@@ -20,12 +20,12 @@ export function stagingPosition(playerIndex: number): Vector3 {
   return new Vector3(-6.6, 0, 0.9 - playerIndex * 1.05);
 }
 
-/** 2×2 micro-offsets so cohabiting tokens never overlap (spec §9). */
+/** 2×2 slots so cohabiting human figures stand apart (not clipping) on a 1.0 tile. */
 const SHARED_OFFSETS = [
-  [-0.18, -0.18],
-  [0.18, -0.18],
-  [-0.18, 0.18],
-  [0.18, 0.18],
+  [-0.3, -0.3],
+  [0.3, -0.3],
+  [-0.3, 0.3],
+  [0.3, 0.3],
 ] as const;
 
 export function tokenRestPosition(state: GameState, playerIndex: number): Vector3 {
@@ -44,6 +44,8 @@ type Segment =
   | { kind: 'pause'; duration: number }
   | { kind: 'shake'; at: Vector3; duration: number }
   | { kind: 'slide'; headCell: number; duration: number }
+  | { kind: 'shrink'; at: Vector3; duration: number }
+  | { kind: 'grow'; at: Vector3; duration: number }
   | { kind: 'climb'; from: Vector3; to: Vector3; duration: number; rungs: number };
 
 interface Plan {
@@ -120,37 +122,28 @@ export class Choreographer {
   }
 
   planSnake(state: GameState, jump: Jump, token: Group, onDone: () => void): void {
-    const curve = registry.snakeCurves.get(jump.from);
+    // Snake bite = a clean shrink-out / grow-in teleport: the piece shrinks away on the
+    // head cell, then re-materialises (pops up) on the destination tile. No cross-board
+    // leap arc (which read as "jumping off the board").
     const tail = cellToWorld(jump.to);
+    const headPos = token.position.clone();
     const rest = tokenRestPosition(jumpedPreview(state, jump), state.current);
-    const segments: Segment[] = [
-      { kind: 'shake', at: token.position.clone(), duration: TIMING.snakeGrab },
-    ];
-    if (curve !== undefined) {
-      segments.push({ kind: 'slide', headCell: jump.from, duration: TIMING.snakeSlide });
-    } else {
-      // No registered spline (shouldn't happen) — fall back to a single long hop.
-      segments.push({
-        kind: 'hop',
-        from: token.position.clone(),
-        to: new Vector3(tail.x, 0, tail.z),
-        duration: TIMING.snakeSlide,
-        peak: 0.5,
-      });
-    }
-    segments.push({ kind: 'hop', from: new Vector3(tail.x, 0, tail.z), to: rest, duration: 0.18, peak: 0.12 });
     this.start({
       token,
       playerIndex: state.current,
-      segments,
+      segments: [
+        { kind: 'shrink', at: headPos, duration: TIMING.snakeShrink },
+        { kind: 'grow', at: rest, duration: TIMING.snakeGrow },
+      ],
       onDone: () => {
-        registry.fx?.puff(new Vector3(tail.x, 0.25, tail.z));
+        registry.fx?.sparkles(new Vector3(tail.x, 0.4, tail.z));
         onDone();
       },
       index: 0,
       t: 0,
     });
     soundBus.play('snake');
+    registry.fx?.puff(new Vector3(headPos.x, 0.25, headPos.z)); // poof at the bite
   }
 
   private start(plan: Plan): void {
@@ -172,9 +165,16 @@ export class Choreographer {
       this.finish(plan);
       return;
     }
-    // Tell the avatar how to carry itself: clambering up a ladder vs. a flat stride.
+    // Tell the avatar how to carry itself: climbing, sliding a snake, or striding.
+    // shrink/grow are a magical teleport — keep the avatar in its neutral idle pose.
     registry.movementMode =
-      segment.kind === 'climb' ? 'climb' : segment.kind === 'slide' || segment.kind === 'shake' ? 'slide' : 'walk';
+      segment.kind === 'climb'
+        ? 'climb'
+        : segment.kind === 'slide' || segment.kind === 'shake'
+          ? 'slide'
+          : segment.kind === 'shrink' || segment.kind === 'grow'
+            ? null
+            : 'walk';
     plan.t += dt;
     const duration = segment.duration;
     const t = Math.min(plan.t / duration, 1);
@@ -231,6 +231,24 @@ export class Choreographer {
         curve.getPointAt(easeInOut(t) * 0.999, tmp);
         token.position.set(tmp.x, Math.max(tmp.y - 0.06, 0), tmp.z);
         token.scale.set(1, 0.96, 1);
+        break;
+      }
+      case 'shrink': {
+        // Bite: collapse to nothing on the head cell, sinking slightly into the tile.
+        const e = easeInOut(t);
+        const s = Math.max(0.001, 1 - e);
+        token.position.set(segment.at.x, segment.at.y - e * 0.12, segment.at.z);
+        token.scale.set(s, s, s);
+        break;
+      }
+      case 'grow': {
+        // Re-materialise on the destination tile with a little overshoot pop (easeOutBack).
+        const c1 = 1.70158;
+        const c3 = c1 + 1;
+        const p = t - 1;
+        const s = Math.max(0.001, 1 + c3 * p * p * p + c1 * p * p);
+        token.position.copy(segment.at);
+        token.scale.set(s, s, s);
         break;
       }
       case 'climb': {

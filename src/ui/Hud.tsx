@@ -63,6 +63,14 @@ export function Hud() {
           <WinModal />
         </>
       )}
+      {/* Landscape-only: a portrait device gets a rotate prompt instead of the game. */}
+      <div className="rotate-gate" role="alert">
+        <div className="rotate-icon">📱</div>
+        <h2>
+          Rotate to <b>Landscape</b>
+        </h2>
+        <p>Serpent&apos;s Ascent is designed for landscape — turn your device sideways to play.</p>
+      </div>
     </div>
   );
 }

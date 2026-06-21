@@ -12,8 +12,36 @@ import { useStore } from './index';
 export function installDebug(): void {
   if (!import.meta.env.DEV) return;
 
+  let frozenDelta: (() => number) | null = null;
+
   const api = {
     store: useStore,
+
+    /** Halt time: every useFrame dt becomes 0, freezing animation mid-pose for a screenshot. */
+    freeze(): string {
+      const clock = registry.r3f?.clock;
+      if (!clock) return 'no clock';
+      if (frozenDelta === null) frozenDelta = clock.getDelta.bind(clock);
+      (clock as { getDelta: () => number }).getDelta = () => 0;
+      return 'frozen';
+    },
+
+    /** Resume time after a freeze(). */
+    unfreeze(): string {
+      const clock = registry.r3f?.clock;
+      if (!clock || frozenDelta === null) return 'not frozen';
+      (clock as { getDelta: () => number }).getDelta = frozenDelta;
+      frozenDelta = null;
+      return 'resumed';
+    },
+
+    /** Reposition the camera for close-up diagnostics (free mode preserves the pose). */
+    moveCamera(px: number, py: number, pz: number): string {
+      const cam = registry.r3f?.camera;
+      if (!cam) return 'no camera';
+      cam.position.set(px, py, pz);
+      return 'moved';
+    },
 
     /** Render one frame and sample pixels at canvas-relative (0..1) coords (diagnostics). */
     samplePixel(u: number, v: number): number[] | string {

@@ -185,18 +185,32 @@ details.advanced summary { cursor: pointer; color: var(--hud-dim); font-size: 13
 .vignette-pulse.go { animation: vpulse 300ms ease-out; }
 @keyframes vpulse { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0; } }
 
-/* ---- portrait: bottom sheet ---- */
-@media (orientation: portrait), (max-width: 700px) {
-  .rail {
-    top: auto; right: 0; left: 0; bottom: 0; width: 100%;
-    max-height: 62vh; border-left: none; border-top: 1px solid var(--hud-border);
-    border-radius: var(--radius) var(--radius) 0 0;
+/* ---- landscape only: a portrait device is blocked with a rotate prompt ---- */
+.rotate-gate { display: none; }
+@media (orientation: portrait) {
+  .rotate-gate {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 32px;
+    background: #14100c; color: var(--hud-text);
   }
-  .rail-scroll { padding: 12px 14px; }
-  .rail-buttons { padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
-  .brand { left: 12px; }
+  .rotate-gate .rotate-icon {
+    font-size: 56px; line-height: 1;
+    animation: rotate-hint 2.6s ease-in-out infinite; transform-origin: center;
+  }
+  .rotate-gate h2 { margin: 0; font-size: 21px; letter-spacing: 0.06em; font-variant: small-caps; }
+  .rotate-gate h2 b { color: var(--accent); }
+  .rotate-gate p { margin: 0; max-width: 290px; color: var(--hud-dim); font-size: 14px; line-height: 1.5; }
+  /* portrait is unsupported — hide the game UI beneath the gate */
+  .rail, .brand, .setup-overlay { display: none; }
+}
+@keyframes rotate-hint {
+  0%, 35% { transform: rotate(0deg); }
+  65%, 100% { transform: rotate(-90deg); }
+}
 
-  /* Setup → single column on narrow screens. */
+/* ---- very narrow (small landscape windows): single-column setup ---- */
+@media (max-width: 600px) {
   .player-cards { grid-template-columns: 1fr; }
   .setup-board-row { flex-direction: column; }
   .board-preview { flex-basis: auto; align-self: center; width: 60%; }

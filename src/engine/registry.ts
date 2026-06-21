@@ -47,6 +47,8 @@ export const registry = {
   movingToken: null as number | null,
   /** What the moving token is doing right now, so the avatar can pose accordingly. */
   movementMode: null as 'walk' | 'climb' | 'slide' | null,
+  /** Player index currently celebrating (ladder-top happy jump) — camera holds on them. */
+  celebrating: null as number | null,
   /** World position of the dice tray center — camera focuses here while rolling. */
   diceTrayPos: null as Vector3 | null,
 };
