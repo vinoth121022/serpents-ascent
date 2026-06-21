@@ -1,11 +1,12 @@
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { CanvasTexture, Group, InstancedMesh, Matrix4, Quaternion, Vector3 } from 'three';
 import { useStore } from '../../store';
 import type { Choreographer } from './choreographer';
 import { stagingPosition, tokenRestPosition } from './choreographer';
 import { registry } from '../registry';
 import type { Theme } from '../theme/themes';
+import { AvatarFigure } from './AvatarFigure';
 import { Figure } from './Figure';
 
 /** Radial-gradient blob — the cheap dynamic contact shadow (DECISIONS.md #6). */
@@ -104,7 +105,15 @@ export function Tokens({ theme, choreographer }: { theme: Theme; choreographer: 
           }}
           position={tokenRestPosition(game, i)}
         >
-          <Figure gender={playerGenders[i] ?? (i % 2 === 0 ? 'male' : 'female')} color={colorFor(i)} />
+          {/* Real human GLB avatar; the procedural figure shows while it streams in. */}
+          <Suspense fallback={<Figure gender={playerGenders[i] ?? (i % 2 === 0 ? 'male' : 'female')} color={colorFor(i)} />}>
+            <AvatarFigure playerIndex={i} />
+          </Suspense>
+          {/* colored player ring at the feet — differentiates identical avatars */}
+          <mesh position={[0, 0.016, 0]} rotation-x={-Math.PI / 2}>
+            <ringGeometry args={[0.26, 0.34, 32]} />
+            <meshStandardMaterial color={colorFor(i)} emissive={colorFor(i)} emissiveIntensity={0.4} roughness={0.5} side={2} />
+          </mesh>
         </group>
       ))}
       {/* home pads */}
