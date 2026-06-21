@@ -9,7 +9,8 @@ export const TIMING = {
   hopPeak: 0.35,
   squash: 0.08,
   ladderApproach: 0.3,
-  ladderPerRung: 0.18,
+  ladderPerRung: 0.36, // slow, deliberate rung-by-rung ascent
+
   snakeGrab: 0.2,
   snakeSlide: 1.4,
 } as const;
@@ -160,6 +161,7 @@ export class Choreographer {
   cancel(): void {
     this.plan = null;
     registry.movingToken = null;
+    registry.movementMode = null;
   }
 
   tick(dt: number): void {
@@ -170,6 +172,9 @@ export class Choreographer {
       this.finish(plan);
       return;
     }
+    // Tell the avatar how to carry itself: clambering up a ladder vs. a flat stride.
+    registry.movementMode =
+      segment.kind === 'climb' ? 'climb' : segment.kind === 'slide' || segment.kind === 'shake' ? 'slide' : 'walk';
     plan.t += dt;
     const duration = segment.duration;
     const t = Math.min(plan.t / duration, 1);
@@ -186,6 +191,7 @@ export class Choreographer {
     plan.token.scale.set(1, 1, 1);
     this.plan = null;
     registry.movingToken = null;
+    registry.movementMode = null;
     plan.onDone();
   }
 

@@ -70,6 +70,7 @@ export function Hud() {
 function GameSidebar() {
   const game = useStore((s) => s.game);
   const roll = useStore((s) => s.roll);
+  const rollWith = useStore((s) => s.rollWith);
   const requestResetView = useStore((s) => s.requestResetView);
   const backToSetup = useStore((s) => s.backToSetup);
   const playerColors = useStore((s) => s.playerColors);
@@ -85,6 +86,7 @@ function GameSidebar() {
   const canRoll = game.phase === 'AWAITING_ROLL';
   const rolling = game.phase === 'DICE_ROLLING';
   const dotColor = playerColors[game.current] ?? '#ffffff';
+  const [testDie, setTestDie] = useState(6); // TEST-ONLY
 
   const logLines = useMemo(
     () =>
@@ -106,6 +108,30 @@ function GameSidebar() {
         <button className="sr-only" disabled={!canRoll} onClick={roll}>
           Roll the die
         </button>
+
+        {/* TEST-ONLY: enter a die value (1–6) and move by it. Remove this block (and
+            store.rollWith) when no longer needed. */}
+        <div
+          className="test-roll"
+          style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '8px 0', fontSize: 13, opacity: 0.9 }}
+        >
+          <span title="Testing only">🧪 Test roll</span>
+          <input
+            type="number"
+            min={1}
+            max={6}
+            value={testDie}
+            onChange={(e) => setTestDie(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && canRoll) rollWith(testDie);
+            }}
+            style={{ width: 48, padding: '4px 6px', textAlign: 'center', borderRadius: 6 }}
+          />
+          <button className="icon-btn" disabled={!canRoll} onClick={() => rollWith(testDie)} style={{ padding: '4px 10px' }}>
+            Move
+          </button>
+        </div>
+
         <div className="log">
           {logLines.length === 0 && <span>Roll a 1 or 6 to enter — then land exactly on 100 to win.</span>}
           {logLines.map((line, i) => (
@@ -226,7 +252,7 @@ function BoardPreview() {
     cells.push(
       <g key={n}>
         <rect x={x} y={y} width={10} height={10} fill={light ? boardColors[0] : boardColors[1]} />
-        <text x={x + 1.2} y={y + 3.6} fontSize={2.7} fill="rgba(38,28,12,0.6)">
+        <text x={x + 1.1} y={y + 3.4} fontSize={2.3} fill="rgba(38,28,12,0.42)">
           {n}
         </text>
       </g>,
@@ -246,20 +272,25 @@ function BoardPreview() {
           const dx = b.x - a.x;
           const dy = b.y - a.y;
           const len = Math.hypot(dx, dy) || 1;
-          const px = (-dy / len) * 1.1;
-          const py = (dx / len) * 1.1;
-          const rungs = Math.max(2, Math.round(len / 5));
+          const px = (-dy / len) * 0.85;
+          const py = (dx / len) * 0.85;
+          const rungs = Math.max(2, Math.round(len / 4.5));
           const rungEls = [];
           for (let k = 1; k < rungs; k++) {
             const tt = k / rungs;
             const cx = a.x + dx * tt;
             const cy = a.y + dy * tt;
-            rungEls.push(<line key={k} x1={cx + px} y1={cy + py} x2={cx - px} y2={cy - py} stroke="#a06a32" strokeWidth={0.55} />);
+            rungEls.push(<line key={k} x1={cx + px} y1={cy + py} x2={cx - px} y2={cy - py} stroke="#b9823e" strokeWidth={0.42} strokeLinecap="round" />);
           }
           return (
-            <g key={`L${i}`}>
-              <line x1={a.x + px} y1={a.y + py} x2={b.x + px} y2={b.y + py} stroke="#a06a32" strokeWidth={0.85} />
-              <line x1={a.x - px} y1={a.y - py} x2={b.x - px} y2={b.y - py} stroke="#a06a32" strokeWidth={0.85} />
+            <g key={`L${i}`} stroke="#7a4e21" strokeWidth={0.95} strokeLinecap="round">
+              {/* dark base for definition, then the lighter rails on top */}
+              <line x1={a.x + px} y1={a.y + py} x2={b.x + px} y2={b.y + py} />
+              <line x1={a.x - px} y1={a.y - py} x2={b.x - px} y2={b.y - py} />
+              <g stroke="#c89150" strokeWidth={0.55}>
+                <line x1={a.x + px} y1={a.y + py} x2={b.x + px} y2={b.y + py} />
+                <line x1={a.x - px} y1={a.y - py} x2={b.x - px} y2={b.y - py} />
+              </g>
               {rungEls}
             </g>
           );
@@ -270,15 +301,18 @@ function BoardPreview() {
           const dx = b.x - a.x;
           const dy = b.y - a.y;
           const len = Math.hypot(dx, dy) || 1;
-          const mx = (a.x + b.x) / 2 + (-dy / len) * 4;
-          const my = (a.y + b.y) / 2 + (dx / len) * 4;
+          const mx = (a.x + b.x) / 2 + (-dy / len) * 3.2;
+          const my = (a.y + b.y) / 2 + (dx / len) * 3.2;
           const hue = SNAKE_HUES[i % SNAKE_HUES.length] ?? '#3e6b5a';
+          const d = `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`;
           return (
-            <g key={`S${i}`}>
-              <path d={`M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`} fill="none" stroke={hue} strokeWidth={2.1} strokeLinecap="round" />
-              <circle cx={a.x} cy={a.y} r={2} fill={hue} />
-              <circle cx={a.x - 0.7} cy={a.y - 0.7} r={0.4} fill="#fff" />
-              <circle cx={a.x + 0.7} cy={a.y - 0.7} r={0.4} fill="#fff" />
+            <g key={`S${i}`} strokeLinecap="round" fill="none">
+              {/* dark casing under a slimmer colored body keeps it readable over tiles */}
+              <path d={d} stroke="rgba(20,14,8,0.5)" strokeWidth={1.9} />
+              <path d={d} stroke={hue} strokeWidth={1.25} />
+              <circle cx={a.x} cy={a.y} r={1.5} fill={hue} stroke="rgba(20,14,8,0.5)" strokeWidth={0.3} />
+              <circle cx={a.x - 0.5} cy={a.y - 0.5} r={0.28} fill="#fff" stroke="none" />
+              <circle cx={a.x + 0.5} cy={a.y - 0.5} r={0.28} fill="#fff" stroke="none" />
             </g>
           );
         })}

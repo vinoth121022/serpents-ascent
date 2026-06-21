@@ -1,9 +1,10 @@
 // Gate 2 enforcement: src/core must have zero imports from three/react/@react-three/zustand.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const FORBIDDEN = /from\s+['"](three|react|zustand|@react-three)[/'"]/;
-const root = new URL('../src/core', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../src/core', import.meta.url));
 
 const offenders = [];
 function walk(dir) {

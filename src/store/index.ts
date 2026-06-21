@@ -134,6 +134,8 @@ export interface AppStore {
   /** Monotonic counters; bumping one triggers the matching one-shot effect. */
   vignettePulseId: number;
   roll: () => void;
+  /** TEST-ONLY: roll a forced die value (1–6) instead of a random one. */
+  rollWith: (value: number) => void;
   onDiceSettled: () => void;
   onTokenArrived: () => void;
   onJumpResolved: () => void;
@@ -197,6 +199,19 @@ export const useStore = create<AppStore>()((set, get) => ({
     const { game } = get();
     if (game.phase !== 'AWAITING_ROLL') return; // input only accepted while awaiting
     set({ game: startRoll(game) });
+  },
+  rollWith: (value) => {
+    // TEST-ONLY: inject a forced value into the roll script so the core draws it
+    // next, then roll normally (physics dice reconciles to it). Remove with the
+    // sidebar "Test roll" control when no longer needed.
+    const { game } = get();
+    if (game.phase !== 'AWAITING_ROLL') return;
+    const v = Math.max(1, Math.min(6, Math.round(value)));
+    const idx = game.scriptIndex;
+    const script = game.script ? [...game.script] : [];
+    while (script.length <= idx) script.push(v);
+    script[idx] = v;
+    set({ game: startRoll({ ...game, script }) });
   },
   onDiceSettled: () => {
     set({ game: diceSettled(get().game) });

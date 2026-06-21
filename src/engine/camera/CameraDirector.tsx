@@ -17,6 +17,7 @@ const AZIMUTH_MAX = 60 * DEG;
 const DIST_MIN = 6;
 const DIST_MAX = 22;
 const PAN_RADIUS = 4;
+const CINEMATIC_DIST = 8.5; // dolly-in distance while a pawn is travelling
 const INTRO_FROM = new Spherical(21.5, 20 * DEG, -38 * DEG);
 const INTRO_SECONDS = 2.5;
 const RESET_SECONDS = 0.8;
@@ -35,6 +36,7 @@ interface Glide {
 }
 
 const tmpV = new Vector3();
+const tmpOffset = new Vector3();
 const tmpS = new Spherical();
 
 /**
@@ -59,6 +61,7 @@ export function CameraDirector() {
   const glide = useRef<Glide | null>(null);
   const introT = useRef(0);
   const winTheta = useRef(0);
+  const cineDist = useRef<number | null>(null); // resting distance to restore after a push-in
 
   // Apply the intro start pose immediately so frame 1 is the establishing shot.
   useEffect(() => {
@@ -190,19 +193,18 @@ export function CameraDirector() {
 
     // --- user mode: clamps + phase-driven camera focus ---
     const target = controls.target;
+    const following =
+      !registry.userDragging && (game.phase === 'TOKEN_MOVING' || game.phase === 'RESOLVING_JUMP');
 
     if (!registry.userDragging && game.phase === 'DICE_ROLLING' && registry.diceTrayPos !== null) {
       // Focus on the rolling die (front tray, outside the normal pan radius).
       target.lerp(registry.diceTrayPos, Math.min(1, dt * 2));
-    } else if (
-      !registry.userDragging &&
-      (game.phase === 'TOKEN_MOVING' || game.phase === 'RESOLVING_JUMP')
-    ) {
-      // Slowly follow the moving toy across the board.
+    } else if (following) {
+      // Lock focus onto the moving pawn (framed on its body, not the floor).
       const token = registry.tokens[game.current];
       if (token !== null && token !== undefined) {
-        tmpV.set(token.position.x, 0, token.position.z);
-        target.lerp(tmpV, Math.min(1, dt * 1.4));
+        tmpV.set(token.position.x, 0.45, token.position.z);
+        target.lerp(tmpV, Math.min(1, dt * 2.4));
       }
     } else {
       // Between turns / free look: clamp the pan, then ease back to the board center.
@@ -214,6 +216,22 @@ export function CameraDirector() {
       }
       target.y = Math.max(-0.5, Math.min(1.5, target.y));
       if (!registry.userDragging) target.lerp(tmpV.set(0, 0, 0), Math.min(1, dt * 1.4));
+    }
+
+    // Cinematic push-in: dolly close to the pawn while it travels, then ease back to
+    // the resting distance once it settles. Never fights an active drag.
+    if (!registry.userDragging) {
+      tmpOffset.copy(camera.position).sub(target);
+      const dist = tmpOffset.length();
+      if (following) {
+        if (cineDist.current === null) cineDist.current = dist;
+        const next = dist + (CINEMATIC_DIST - dist) * Math.min(1, dt * 1.8);
+        camera.position.copy(target).add(tmpOffset.setLength(next));
+      } else if (cineDist.current !== null) {
+        const next = dist + (cineDist.current - dist) * Math.min(1, dt * 1.8);
+        camera.position.copy(target).add(tmpOffset.setLength(next));
+        if (Math.abs(next - cineDist.current) < 0.05) cineDist.current = null;
+      }
     }
 
     controls.update();
