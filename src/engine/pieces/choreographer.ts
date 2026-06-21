@@ -13,7 +13,7 @@ export const TIMING = {
 
   snakeShrink: 0.62, // bite: the piece slowly shrinks away at the head cell
   snakeGrow: 0.85, // slowly re-materialises (pops up) on the destination tile
-  snakeJumpHop: 0.7, // a stride that vaults OVER a snake it crosses while walking
+  snakeJumpHop: 0.9, // a deliberate vault OVER a snake it crosses (lets the clip land)
 } as const;
 
 /** Off-board home pads along the left edge of the table. */
@@ -113,7 +113,7 @@ export class Choreographer {
         from,
         to,
         duration: jumpOver ? TIMING.snakeJumpHop : TIMING.hopPerCell,
-        peak: jumpOver ? 0.5 : 0.03,
+        peak: jumpOver ? 0.22 : 0.03,
         stride: !jumpOver,
         jumpOver,
       });

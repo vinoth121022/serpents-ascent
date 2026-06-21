@@ -7,8 +7,12 @@ import { registry } from '../registry';
 import type { Theme } from '../theme/themes';
 
 const SNAKE_MODEL = '/models/snake.glb';
-const THICKNESS = 0.42; // world body diameter the model is scaled to
-const SNAKE_LIFT = 0.16; // belly height — drapes the snake OVER the ladders (no clipping)
+const THICKNESS = 0.34; // snake-like body diameter (prominent but not bulky)
+const SNAKE_LIFT = 0.05; // belly rests ON the board (no floating-bird gap)
+// Warm, natural snake hues (reds / oranges / olives) — reads as a real snake, not neon.
+const NATURAL_SNAKE = [
+  '#b34a2e', '#c8822f', '#9a7b2c', '#8c3b28', '#c2a046', '#6f7a33', '#a85c2c', '#b5503f', '#7d5a2b',
+];
 const FORWARD = new Vector3(0, 0, 1); // the model's long axis (measured: length runs along Z)
 
 useGLTF.preload(SNAKE_MODEL, false, true); // meshopt-compressed
@@ -54,7 +58,7 @@ export function Snakes({ board, theme }: { board: BoardDefinition; theme: Theme 
         const sz = span / length;
         // One consistent hue across ALL of a snake's meshes (its "pieces" stay one style).
         // A bright base + low emissive lifts the dark scale texture so the colour reads.
-        const hue = new Color(theme.snakeColors[i % theme.snakeColors.length] ?? '#3e8a5f');
+        const hue = new Color(NATURAL_SNAKE[i % NATURAL_SNAKE.length] ?? '#b34a2e');
         const obj = scene.clone(true) as Object3D;
         obj.position.sub(dims.center); // recentre so the body straddles the line
         obj.traverse((o) => {
@@ -63,11 +67,14 @@ export function Snakes({ board, theme }: { board: BoardDefinition; theme: Theme 
           mesh.castShadow = true;
           const src = mesh.material as MeshStandardMaterial;
           const m = src.clone();
-          if (m.color) m.color.copy(hue).multiplyScalar(1.9);
+          // Natural tint: keep the model's scale texture readable, only a gentle hue
+          // shift + a whisper of emissive so it looks like a real snake, not neon.
+          if (m.color) m.color.copy(hue).multiplyScalar(1.3);
           if (m.emissive) {
             m.emissive.copy(hue);
-            m.emissiveIntensity = 0.32;
+            m.emissiveIntensity = theme.snakeEmissiveIntensity > 0.4 ? 0.18 : 0.1;
           }
+          if ('roughness' in m) m.roughness = 0.5;
           mesh.material = m;
           materials.push(m);
         });

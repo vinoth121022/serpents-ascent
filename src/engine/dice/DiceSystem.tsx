@@ -12,15 +12,13 @@ import type { Theme } from '../theme/themes';
 
 const DIE_SIZE = 0.62;
 const HALF = DIE_SIZE / 2;
-// Correct the die WHILE it is still finishing its roll on the floor — never after it
-// has come to a dead stop (that "land, pause, then rotate" is the glitch we're killing).
-const SETTLE_LIN = 0.7; // still some travel
-const SETTLE_ANG = 2.4; // still rotating slowly
-const SETTLE_FLOOR = 0.12; // must be resting near the tray floor (not mid-bounce)
-const SETTLE_MIN_AIR = 0.45; // ignore the throw + first bounces
-const STILL_SETTLE = 0.3; // low-energy but not flat-on-floor (corner-rested) → flatten after this
-const HARD_TIMEOUT = 2.2; // final backstop if it somehow never reads as still
-const SETTLE_SECONDS = 0.3; // quick eased steer that merges with the deceleration
+// The die tumbles freely in the air, then we take over the FINAL DESCENT and roll it
+// onto the target face as it lands — so it settles already showing the result and
+// never rotates again after it has come to rest (the bug we're killing).
+const SETTLE_MIN_AIR = 0.42; // let it rise + tumble through its arc first
+const CATCH_HEIGHT = 0.62; // begin the guided landing once it falls within this of the floor
+const HARD_TIMEOUT = 2.2; // backstop if it somehow never descends cleanly
+const SETTLE_SECONDS = 0.22; // the guided descend-and-roll-to-face duration
 
 const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
 
@@ -127,7 +125,6 @@ function Die({ layout, theme }: { layout: TrayLayout; theme: Theme }) {
   const slerpTo = useRef(new Quaternion());
   const settledFace = useRef(0);
   const bounced = useRef(false);
-  const stillTime = useRef(0); // how long the die has been low-energy
   const settleFromPos = useRef(new Vector3());
   const settleToPos = useRef(new Vector3());
 
@@ -154,21 +151,21 @@ function Die({ layout, theme }: { layout: TrayLayout; theme: Theme }) {
           queueMicrotask(() => useStore.getState().onDiceSettled());
           return;
         }
-        // Throw: teleport above the tray, hurl with randomized impulse + torque.
+        // Throw: toss UP off the tray floor with spin, so it tumbles through a real
+        // arc and gives a clean, catchable descent (we guide the final landing).
         // Visual randomness only — the outcome was decided by core/ before this.
         const r = (k: number): number => (Math.random() * 2 - 1) * k;
         body.setBodyType(0, true); // dynamic
         body.setTranslation(
-          { x: layout.center.x + r(0.5), y: FLOOR_TOP + 2.3, z: layout.center.z + r(0.5) },
+          { x: layout.center.x + r(0.3), y: FLOOR_TOP + HALF + 0.35, z: layout.center.z + r(0.3) },
           true,
         );
         body.setRotation({ x: Math.random(), y: Math.random(), z: Math.random(), w: Math.random() + 0.2 }, true);
-        body.setLinvel({ x: r(2.2), y: -3.5, z: r(2.2) }, true);
-        body.setAngvel({ x: r(14), y: r(14), z: r(14) }, true);
+        body.setLinvel({ x: r(1.0), y: 5.0, z: r(1.0) }, true);
+        body.setAngvel({ x: r(16), y: r(16), z: r(16) }, true);
         mode.current = 'flying';
         airTime.current = 0;
         bounced.current = false;
-        stillTime.current = 0;
         soundBus.play('roll');
       }),
     [layout],
@@ -222,24 +219,16 @@ function Die({ layout, theme }: { layout: TrayLayout; theme: Theme }) {
     if (mode.current === 'flying') {
       airTime.current += dt;
       const lv = body.linvel();
-      const av = body.angvel();
-      const speed = Math.hypot(lv.x, lv.y, lv.z);
-      const spin = Math.hypot(av.x, av.y, av.z);
       const target = must(useStore.getState().game.turn.die, 'flying die with no core value');
-      const onFloor = body.translation().y < FLOOR_TOP + HALF + SETTLE_FLOOR;
-      const lowEnergy = speed < SETTLE_LIN && spin < SETTLE_ANG;
-      stillTime.current = lowEnergy ? stillTime.current + dt : 0;
-      if (airTime.current > SETTLE_MIN_AIR && lowEnergy && onFloor) {
-        // Ideal: came to rest flat on the tray floor.
-        beginReconcile(target, body.rotation() as Quat);
-      } else if (airTime.current > SETTLE_MIN_AIR && stillTime.current > STILL_SETTLE) {
-        // Came to rest balanced on a corner/edge (not flat) — flatten in place NOW rather
-        // than letting the die sit there until the hard timeout (the "stuck die" bug).
-        body.setLinvel({ x: 0, y: 0, z: 0 }, false);
-        body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+      const y = body.translation().y;
+      const descending = lv.y < 0.3; // falling (or no longer rising)
+      const nearFloor = y < FLOOR_TOP + HALF + CATCH_HEIGHT;
+      if (airTime.current > SETTLE_MIN_AIR && descending && nearFloor) {
+        // Take over the final descent and roll to the target face AS it lands, so the
+        // die comes to rest already showing the result — no rotation after it stops.
         beginReconcile(target, body.rotation() as Quat);
       } else if (airTime.current > HARD_TIMEOUT) {
-        // Still tumbling after the backstop window — snap home and settle.
+        // Backstop: never descended cleanly — snap home and settle.
         body.setLinvel({ x: 0, y: 0, z: 0 }, false);
         body.setAngvel({ x: 0, y: 0, z: 0 }, false);
         body.setTranslation(restPosition, false);

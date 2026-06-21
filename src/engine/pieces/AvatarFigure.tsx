@@ -122,8 +122,10 @@ export function AvatarFigure({ playerIndex }: { playerIndex: number }) {
     let loop = true;
     if (winningMe) want = CLIP.win;
     else if (climbing) want = CLIP.climb;
-    else if (mode === 'slide') want = CLIP.snake;
-    else if (cheerTimer.current > 0) {
+    else if (mode === 'slide') {
+      want = CLIP.snake; // jump-over-obstacle: play once and clamp on the landing pose
+      loop = false;
+    } else if (cheerTimer.current > 0) {
       want = CLIP.cheer;
       loop = false;
     } else if (mode === 'walk') want = CLIP.walk;
