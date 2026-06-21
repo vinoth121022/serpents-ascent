@@ -13,6 +13,7 @@ export const TIMING = {
 
   snakeShrink: 0.62, // bite: the piece slowly shrinks away at the head cell
   snakeGrow: 0.85, // slowly re-materialises (pops up) on the destination tile
+  snakeJumpHop: 0.7, // a stride that vaults OVER a snake it crosses while walking
 } as const;
 
 /** Off-board home pads along the left edge of the table. */
@@ -20,12 +21,13 @@ export function stagingPosition(playerIndex: number): Vector3 {
   return new Vector3(-6.6, 0, 0.9 - playerIndex * 1.05);
 }
 
-/** 2×2 slots so cohabiting human figures stand apart (not clipping) on a 1.0 tile. */
+/** 2×2 slots so cohabiting human figures stand apart yet stay inside the 1.0 tile
+ * (tokens also shrink a little when sharing — see Tokens.tsx). */
 const SHARED_OFFSETS = [
-  [-0.3, -0.3],
-  [0.3, -0.3],
-  [-0.3, 0.3],
-  [0.3, 0.3],
+  [-0.24, -0.24],
+  [0.24, -0.24],
+  [-0.24, 0.24],
+  [0.24, 0.24],
 ] as const;
 
 export function tokenRestPosition(state: GameState, playerIndex: number): Vector3 {
@@ -40,7 +42,7 @@ export function tokenRestPosition(state: GameState, playerIndex: number): Vector
 }
 
 type Segment =
-  | { kind: 'hop'; from: Vector3; to: Vector3; duration: number; peak: number; stride?: boolean }
+  | { kind: 'hop'; from: Vector3; to: Vector3; duration: number; peak: number; stride?: boolean; jumpOver?: boolean }
   | { kind: 'pause'; duration: number }
   | { kind: 'shake'; at: Vector3; duration: number }
   | { kind: 'slide'; headCell: number; duration: number }
@@ -76,6 +78,15 @@ export class Choreographer {
   planMove(state: GameState, token: Group, onDone: () => void): void {
     const path = state.turn.path;
     const playerIndex = state.current;
+    const startCell = must(state.players[playerIndex]).cell;
+    // Snake bodies as world-space segments (head → tail) for crossing detection.
+    const snakes = state.board.jumps.filter((j) => j.kind === 'snake');
+    const snakeHeads = new Set(snakes.map((s) => s.from));
+    const snakeSegs = snakes.map((s) => {
+      const h = cellToWorld(s.from);
+      const t = cellToWorld(s.to);
+      return [h.x, h.z, t.x, t.z] as const;
+    });
     const segments: Segment[] = [];
     let from = token.position.clone();
     for (let i = 0; i < path.length; i++) {
@@ -86,8 +97,26 @@ export class Choreographer {
         i === path.length - 1
           ? tokenRestPosition(landedPreview(state, playerIndex), playerIndex)
           : new Vector3(x, 0, z);
+      // Crossing a snake mid-walk → vault OVER it with the jump-over-obstacle clip,
+      // then resume walking. Triggers when a step passes THROUGH a snake-head cell or
+      // crosses a snake's body. LANDING on a head is excluded (that triggers the bite).
+      const fromCell = i === 0 ? startCell : must(path[i - 1]);
+      const isLanding = i === path.length - 1;
+      const jumpOver =
+        fromCell >= 1 &&
+        !(isLanding && snakeHeads.has(cell)) &&
+        ((!isLanding && snakeHeads.has(cell)) ||
+          snakeSegs.some((s) => segmentsCross(from.x, from.z, to.x, to.z, s[0], s[1], s[2], s[3])));
       // Walk, don't bounce: a grounded stride (the Figure swings its own legs).
-      segments.push({ kind: 'hop', from, to, duration: TIMING.hopPerCell, peak: 0.03, stride: true });
+      segments.push({
+        kind: 'hop',
+        from,
+        to,
+        duration: jumpOver ? TIMING.snakeJumpHop : TIMING.hopPerCell,
+        peak: jumpOver ? 0.5 : 0.03,
+        stride: !jumpOver,
+        jumpOver,
+      });
       from = to;
     }
     this.start({ token, playerIndex, segments, onDone, index: 0, t: 0 });
@@ -170,7 +199,7 @@ export class Choreographer {
     registry.movementMode =
       segment.kind === 'climb'
         ? 'climb'
-        : segment.kind === 'slide' || segment.kind === 'shake'
+        : segment.kind === 'slide' || segment.kind === 'shake' || (segment.kind === 'hop' && segment.jumpOver === true)
           ? 'slide'
           : segment.kind === 'shrink' || segment.kind === 'grow'
             ? null
@@ -279,4 +308,19 @@ function jumpedPreview(state: GameState, jump: Jump): GameState {
     ...state,
     players: state.players.map((p) => (p.id === state.current ? { ...p, cell: jump.to } : p)),
   };
+}
+
+/** Do segments A→B and C→D cross (2D, XZ plane)? Interior crossings only — endpoint
+ * grazes are ignored so a hop that merely starts/ends near a snake doesn't count. */
+function segmentsCross(
+  ax: number, az: number, bx: number, bz: number,
+  cx: number, cz: number, dx: number, dz: number,
+): boolean {
+  const r1x = bx - ax, r1z = bz - az;
+  const r2x = dx - cx, r2z = dz - cz;
+  const denom = r1x * r2z - r1z * r2x;
+  if (Math.abs(denom) < 1e-6) return false; // parallel / degenerate
+  const t = ((cx - ax) * r2z - (cz - az) * r2x) / denom;
+  const u = ((cx - ax) * r1z - (cz - az) * r1x) / denom;
+  return t > 0.02 && t < 0.98 && u > 0.05 && u < 0.95;
 }

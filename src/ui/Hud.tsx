@@ -115,9 +115,8 @@ function GameSidebar() {
           <span className="dot" style={{ background: dotColor, color: dotColor }} />
           {game.phase === 'WIN' ? `${must(game.players[game.winner ?? 0]).name} wins!` : `${current.name}'s turn`}
         </div>
-        <div className="roll-hint">{rolling ? 'Rolling the die…' : canRoll ? '🎲 Click the die to roll' : '…'}</div>
-        <button className="sr-only" disabled={!canRoll} onClick={roll}>
-          Roll the die
+        <button className="roll-hint" disabled={!canRoll} onClick={roll} title="Roll the die">
+          {rolling ? 'Rolling the die…' : canRoll ? '🎲 Click the die — or tap here — to roll' : '…'}
         </button>
 
         {/* TEST-ONLY: enter a die value (1–6) and move by it. Remove this block (and
@@ -432,14 +431,15 @@ function SetupScreen() {
           <p>Pick your players, colors and board — then climb. Roll a 1 or 6 to enter, land exactly on 100 to win.</p>
         </div>
 
-        <label>Players</label>
-        <div className="seg">
-          {[2, 3, 4].map((n) => (
-            <button key={n} className={count === n ? 'on' : undefined} onClick={() => setCount(n)}>
-              {n}
-            </button>
-          ))}
-        </div>
+        <div className="setup-section">
+          <div className="setup-section-title">Players</div>
+          <div className="seg seg-count">
+            {[2, 3, 4].map((n) => (
+              <button key={n} className={count === n ? 'on' : undefined} onClick={() => setCount(n)}>
+                {n}
+              </button>
+            ))}
+          </div>
 
         <div className="player-cards">
           {Array.from({ length: count }, (_, i) => (
@@ -474,6 +474,7 @@ function SetupScreen() {
               </div>
             </div>
           ))}
+        </div>
         </div>
 
         <div className="setup-section">

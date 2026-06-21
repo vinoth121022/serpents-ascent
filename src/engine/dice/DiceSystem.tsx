@@ -308,6 +308,12 @@ function Die({ layout, theme }: { layout: TrayLayout; theme: Theme }) {
           useStore.getState().roll(); // no-op unless AWAITING_ROLL; core decides the value
         }}
       >
+        {/* Generous invisible hit volume — makes the die easy to click/tap (renders
+            nothing: no colour, no depth) without changing how the die looks. */}
+        <mesh>
+          <boxGeometry args={[1.15, 1.15, 1.15]} />
+          <meshBasicMaterial colorWrite={false} depthWrite={false} />
+        </mesh>
         <mesh geometry={dieGeometry} castShadow>
           <meshPhysicalMaterial
             color={theme.die.color}

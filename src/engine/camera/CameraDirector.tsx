@@ -1,7 +1,7 @@
 import { OrbitControls } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Spherical, Vector3 } from 'three';
+import { PerspectiveCamera, Spherical, Vector3 } from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useStore } from '../../store';
 import { registry } from '../registry';
@@ -51,6 +51,8 @@ const tmpS = new Spherical();
 export function CameraDirector() {
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
+  const started = useStore((s) => s.started);
   const aspect = useThree((s) => s.size.width / s.size.height);
   // Narrow (portrait) viewports need a longer default distance to frame the board.
   const DEFAULT_VIEW = useMemo(
@@ -78,6 +80,17 @@ export function CameraDirector() {
     camera.position.setFromSpherical(INTRO_FROM);
     camera.lookAt(0, 0, 0);
   }, [camera]);
+
+  // Frame the 3D scene in the area LEFT of the sidebar so the board is never hidden
+  // behind it (rail width mirrors the CSS clamp). Cleared during setup.
+  useEffect(() => {
+    const cam = camera as PerspectiveCamera;
+    if (typeof cam.setViewOffset !== 'function') return undefined;
+    const railW = started ? Math.min(312, Math.max(212, size.width * 0.26)) : 0;
+    if (railW > 1) cam.setViewOffset(size.width, size.height, railW / 2, 0, size.width, size.height);
+    else cam.clearViewOffset();
+    return () => cam.clearViewOffset();
+  }, [camera, size, started]);
 
   // Skip the intro on any input.
   useEffect(() => {
@@ -304,17 +317,26 @@ export function CameraDirector() {
       (phase === 'AWAITING_ROLL' || phase === 'DICE_ROLLING') &&
       die !== null
     ) {
-      // Straighten the view: glide target onto the die and the rig to azimuth 0,
-      // a level polar, and the close-up distance — a consistent front-on shot.
-      target.lerp(die, Math.min(1, dt * 2.5));
+      // Straighten the view: glide target onto the die and the rig to azimuth 0, a
+      // level polar, and the close-up distance — then SNAP exact when within tolerance
+      // so the die holds perfectly still and stays reliably clickable (a drifting die
+      // is why clicks were missing).
+      if (target.distanceTo(die) < 0.015) target.copy(die);
+      else target.lerp(die, Math.min(1, dt * 3.2));
       tmpS.setFromVector3(tmpOffset.copy(camera.position).sub(target));
-      const k = Math.min(1, dt * 2.2);
-      tmpS.radius += (DIE_DIST - tmpS.radius) * k;
-      tmpS.phi += (STRAIGHT_POLAR - tmpS.phi) * k;
       let dTheta = -tmpS.theta;
       while (dTheta > Math.PI) dTheta -= Math.PI * 2;
       while (dTheta < -Math.PI) dTheta += Math.PI * 2;
-      tmpS.theta += dTheta * k;
+      const dRadius = DIE_DIST - tmpS.radius;
+      const dPhi = STRAIGHT_POLAR - tmpS.phi;
+      if (Math.abs(dRadius) < 0.04 && Math.abs(dPhi) < 0.008 && Math.abs(dTheta) < 0.008) {
+        tmpS.set(DIE_DIST, STRAIGHT_POLAR, 0); // arrived — hold the framing exactly
+      } else {
+        const k = Math.min(1, dt * 3.0);
+        tmpS.radius += dRadius * k;
+        tmpS.phi += dPhi * k;
+        tmpS.theta += dTheta * k;
+      }
       camera.position.setFromSpherical(tmpS).add(target);
       cineDist.current = null;
     } else if (moving && hasToken) {

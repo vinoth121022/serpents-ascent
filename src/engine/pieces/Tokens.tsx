@@ -66,14 +66,21 @@ export function Tokens({ theme, choreographer }: { theme: Theme; choreographer: 
   useFrame((_, dt) => {
     choreographer.tick(Math.min(dt, 0.05));
 
-    // Idle tokens ease toward their rest slots (handles shared-cell shuffles).
+    // Idle tokens ease toward their rest slots (handles shared-cell shuffles), and
+    // shrink a little when sharing a cell so cohabiting figures sit inside one tile.
     const game = useStore.getState().game;
     for (let i = 0; i < game.players.length; i++) {
       if (registry.movingToken === i) continue;
       const token = refs.current[i];
       if (token === null || token === undefined) continue;
+      const me = game.players[i];
+      if (me === undefined) continue;
       const rest = tokenRestPosition(game, i);
       token.position.lerp(rest, Math.min(1, dt * 8));
+      const share = me.cell > 0 ? game.players.filter((p) => p.cell === me.cell).length : 1;
+      const targetScale = share >= 3 ? 0.66 : share === 2 ? 0.82 : 1;
+      const ns = token.scale.x + (targetScale - token.scale.x) * Math.min(1, dt * 8);
+      token.scale.setScalar(ns);
     }
 
     // Blob shadows track tokens; they shrink/fade with hop height.

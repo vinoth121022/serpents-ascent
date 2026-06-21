@@ -1,3 +1,4 @@
+import { type PerspectiveCamera, Vector3 } from 'three';
 import { simulateGame, snapshot } from '../core';
 import { medianFps, registry } from '../engine/registry';
 import { useStore } from './index';
@@ -41,6 +42,25 @@ export function installDebug(): void {
       if (!cam) return 'no camera';
       cam.position.set(px, py, pz);
       return 'moved';
+    },
+
+    /** Live choreographer movement state (diagnostics). */
+    probe(): { movingToken: number | null; movementMode: string | null; tokenY: (number | null)[] } {
+      return {
+        movingToken: registry.movingToken,
+        movementMode: registry.movementMode,
+        tokenY: registry.tokens.map((t) => (t ? Math.round(t.position.y * 100) / 100 : null)),
+      };
+    },
+
+    /** Project a world point to canvas screen px via the live camera (offset-aware). */
+    screenOf(x: number, y: number, z: number): { x: number; y: number } | string {
+      const cam = registry.r3f?.camera as unknown as PerspectiveCamera | undefined;
+      const gl = registry.gl;
+      if (!cam || !gl) return 'no camera/gl';
+      const v = new Vector3(x, y, z).project(cam);
+      const rect = gl.domElement.getBoundingClientRect();
+      return { x: (v.x * 0.5 + 0.5) * rect.width + rect.left, y: (-v.y * 0.5 + 0.5) * rect.height + rect.top };
     },
 
     /** Render one frame and sample pixels at canvas-relative (0..1) coords (diagnostics). */
