@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cellToGrid, formatEvent, must, TRADITIONAL_BOARD } from '../core';
 import { THEMES, type ThemeId } from '../engine/theme/themes';
 import {
@@ -398,6 +399,94 @@ function BoardColorPicker() {
   );
 }
 
+const PLAYER_OPTIONS = [
+  { count: 2, icon: '👥', label: '2 Players' },
+  { count: 3, icon: '👥👥', label: '3 Players' },
+  { count: 4, icon: '🎮', label: '4 Players' },
+] as const;
+
+/** Premium glassmorphic player-count selector — a gold gradient pill that springs
+ * between options (Framer Motion shared layout), with full radio-group keyboard
+ * support, focus-visible ring and reduced-motion fallback (WCAG AA). */
+function PlayersSelector({ count, setCount }: { count: number; setCount: (n: number) => void }) {
+  const reduce = useReducedMotion();
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const spring = reduce
+    ? { duration: 0 }
+    : ({ type: 'spring', stiffness: 480, damping: 34, mass: 0.7 } as const);
+
+  const select = (i: number): void => {
+    const idx = ((i % PLAYER_OPTIONS.length) + PLAYER_OPTIONS.length) % PLAYER_OPTIONS.length;
+    const opt = PLAYER_OPTIONS[idx];
+    if (opt === undefined) return;
+    setCount(opt.count);
+    refs.current[idx]?.focus();
+  };
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    const idx = PLAYER_OPTIONS.findIndex((o) => o.count === count);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      select(idx + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      select(idx - 1);
+    }
+  };
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Number of players"
+      onKeyDown={onKeyDown}
+      className="flex gap-2 rounded-2xl border border-white/10 bg-white/5 p-1.5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_10px_30px_rgba(0,0,0,0.45)]"
+    >
+      {PLAYER_OPTIONS.map((opt, i) => {
+        const active = count === opt.count;
+        return (
+          <motion.button
+            key={opt.count}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-label={opt.label}
+            tabIndex={active ? 0 : -1}
+            onClick={() => setCount(opt.count)}
+            whileHover={reduce ? undefined : { y: -2 }}
+            whileTap={reduce ? undefined : { scale: 0.96 }}
+            transition={spring}
+            className="relative isolate flex min-h-[52px] flex-1 cursor-pointer select-none appearance-none items-center justify-center rounded-xl border-0 bg-white/[0.03] px-3 font-[inherit] outline-none transition-colors duration-200 hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-[#FFD166] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d0a07]"
+          >
+            {active && (
+              <motion.span
+                layoutId="players-active-pill"
+                transition={spring}
+                aria-hidden="true"
+                className="absolute inset-0 -z-10 rounded-xl"
+                style={{
+                  background: 'linear-gradient(180deg, #FFE493 0%, #FFD166 45%, #E7AE3C 100%)',
+                  boxShadow:
+                    '0 0 24px rgba(255,209,102,0.55), 0 6px 16px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.5)',
+                }}
+              />
+            )}
+            <span
+              className={`flex items-center gap-2 font-semibold tracking-wide transition-colors duration-200 ${active ? 'text-[#2a1d07]' : 'text-[#cdbfa6] hover:text-[#f3ecdf]'}`}
+            >
+              <span aria-hidden="true" className="text-base leading-none">
+                {opt.icon}
+              </span>
+              <span className="whitespace-nowrap text-sm">{opt.label}</span>
+            </span>
+          </motion.button>
+        );
+      })}
+    </div>
+  );
+}
+
 const GENDERS: Gender[] = ['male', 'female'];
 
 function SetupScreen() {
@@ -433,13 +522,7 @@ function SetupScreen() {
 
         <div className="setup-section">
           <div className="setup-section-title">Players</div>
-          <div className="seg seg-count">
-            {[2, 3, 4].map((n) => (
-              <button key={n} className={count === n ? 'on' : undefined} onClick={() => setCount(n)}>
-                {n}
-              </button>
-            ))}
-          </div>
+          <PlayersSelector count={count} setCount={setCount} />
 
         <div className="player-cards">
           {Array.from({ length: count }, (_, i) => (

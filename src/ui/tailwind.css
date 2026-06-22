@@ -1,0 +1,10 @@
+/* Tailwind v4 — UTILITIES ONLY (deliberately no preflight/base reset) so the
+   existing vanilla-CSS HUD, setup and board styles are left completely untouched.
+   Only the new Framer-Motion components opt into these utility classes. */
+@layer theme, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@theme {
+  --color-gold: #ffd166;
+}
